@@ -62,14 +62,14 @@ def train(
             img, label = img.to(device), label.to(device)
 
             # ---- training step ----
-            logits = model(img)                          # forward
-            loss = loss_func(logits, label)              # compute CE loss
+            logits = model(img)
+            loss = loss_func(logits, label)
 
-            optimizer.zero_grad(set_to_none=True)        # zero grad
-            loss.backward()                               # backprop
-            optimizer.step()                              # update
+            optimizer.zero_grad(set_to_none=True)
+            loss.backward()
+            optimizer.step()
 
-            # track training accuracy for this batch
+            # track batch training accuracy
             with torch.no_grad():
                 pred = logits.argmax(dim=1)
                 acc = (pred == label).float().mean().item()
@@ -80,11 +80,8 @@ def train(
         # disable gradient computation and switch to evaluation mode
         with torch.inference_mode():
             model.eval()
-
             for img, label in val_data:
                 img, label = img.to(device), label.to(device)
-
-                # ---- validation accuracy ----
                 logits = model(img)
                 pred = logits.argmax(dim=1)
                 acc = (pred == label).float().mean().item()
@@ -108,7 +105,7 @@ def train(
             )
 
     # save and overwrite the model in the root directory for grading
-    save_model(model)
+    save_model(model, "model.th")  # <-- pass a filename
 
     # save a copy of model weights in the log directory
     torch.save(model.state_dict(), log_dir / f"{model_name}.th")
