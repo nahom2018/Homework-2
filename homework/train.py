@@ -1,4 +1,5 @@
 import argparse
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -9,6 +10,17 @@ import torch.utils.tensorboard as tb
 from .models import ClassificationLoss, load_model, save_model
 from .utils import load_data
 
+# Try to import a factory that builds a model from a name.
+# If your starter code calls this something else (e.g., make_model/get_model),
+# adjust the import below accordingly.
+try:
+    from .models import build_model  # preferred name
+except Exception:  # pragma: no cover
+    try:
+        from .models import make_model as build_model  # common alias
+    except Exception:
+        build_model = None
+
 
 def train(
     exp_dir: str = "logs",
@@ -17,6 +29,7 @@ def train(
     lr: float = 1e-3,
     batch_size: int = 128,
     seed: int = 2024,
+    ckpt: str | None = None,   # <-- optional checkpoint path (file), not a directory
     **kwargs,
 ):
     if torch.cuda.is_available():
@@ -24,7 +37,7 @@ def train(
     elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
         device = torch.device("mps")
     else:
-        print("CUDA not available, using CPU")
+        print("CUDA/MPS not available, using CPU")
         device = torch.device("cpu")
 
     # set random seed so each run is deterministic
@@ -35,11 +48,32 @@ def train(
     log_dir = Path(exp_dir) / f"{model_name}_{datetime.now().strftime('%m%d_%H%M%S')}"
     logger = tb.SummaryWriter(log_dir)
 
-    # note: the grader uses default kwargs, you'll have to bake them in for the final submission
-    model = load_model(model_name, **kwargs)
+    # ---------------------------------------------------------------------
+    # Build the model first, then (optionally) load weights from a checkpoint
+    # ---------------------------------------------------------------------
+    if build_model is None:
+        raise RuntimeError(
+            "Could not find a model factory (expected models.build_model or models.make_model). "
+            "Import the correct constructor from homework.models and rename it here."
+        )
+
+    # kwargs may contain extra hyperparameters for the model constructor
+    model = build_model(model_name, **kwargs)
+
+    # If a checkpoint file is provided, load weights into the constructed model
+    if ckpt is not None:
+        if os.path.isfile(ckpt):
+            load_model(model, ckpt, map_location="cpu")
+            print(f"Loaded checkpoint: {ckpt}")
+        else:
+            raise FileNotFoundError(
+                f"ckpt='{ckpt}' is not a file. Pass a valid .pt/.pth path or omit --ckpt to train from scratch."
+            )
+
     model = model.to(device)
     model.train()
 
+    # NOTE: these are dataset *directories*. Do not pass these to torch.load.
     train_data = load_data("classification_data/train", shuffle=True, batch_size=batch_size, num_workers=2)
     val_data = load_data("classification_data/val", shuffle=False)
 
@@ -80,7 +114,11 @@ def train(
         epoch_train_acc = torch.as_tensor(metrics["train_acc"]).mean()
         epoch_val_acc = torch.as_tensor(metrics["val_acc"]).mean()
 
+        # TODO: actually log to TensorBoard
         raise NotImplementedError("Logging not implemented")
+        # Example when you implement:
+        # logger.add_scalar("acc/train", float(epoch_train_acc), epoch)
+        # logger.add_scalar("acc/val", float(epoch_val_acc), epoch)
 
         # print on first, last, every 10th epoch
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % 10 == 0:
@@ -105,9 +143,11 @@ if __name__ == "__main__":
     parser.add_argument("--model_name", type=str, required=True)
     parser.add_argument("--num_epoch", type=int, default=50)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--seed", type=int, default=2024)
+    parser.add_argument("--ckpt", type=str, default=None, help="Optional checkpoint file to resume from")
 
-    # optional: additional model hyperparamters
+    # optional: additional model hyperparameters (forwarded via **kwargs)
     # parser.add_argument("--num_layers", type=int, default=3)
 
     # pass all arguments to train
