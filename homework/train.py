@@ -45,7 +45,7 @@ def train(
 
     # create loss function and optimizer
     loss_func = ClassificationLoss()
-    # optimizer = ...
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
     global_step = 0
     metrics = {"train_acc": [], "val_acc": []}
@@ -61,8 +61,19 @@ def train(
         for img, label in train_data:
             img, label = img.to(device), label.to(device)
 
-            # TODO: implement training step
-            raise NotImplementedError("Training step not implemented")
+            # ---- training step ----
+            logits = model(img)                          # forward
+            loss = loss_func(logits, label)              # compute CE loss
+
+            optimizer.zero_grad(set_to_none=True)        # zero grad
+            loss.backward()                               # backprop
+            optimizer.step()                              # update
+
+            # track training accuracy for this batch
+            with torch.no_grad():
+                pred = logits.argmax(dim=1)
+                acc = (pred == label).float().mean().item()
+                metrics["train_acc"].append(acc)
 
             global_step += 1
 
@@ -73,14 +84,20 @@ def train(
             for img, label in val_data:
                 img, label = img.to(device), label.to(device)
 
-                # TODO: compute validation accuracy
-                raise NotImplementedError("Validation accuracy not implemented")
+                # ---- validation accuracy ----
+                logits = model(img)
+                pred = logits.argmax(dim=1)
+                acc = (pred == label).float().mean().item()
+                metrics["val_acc"].append(acc)
 
         # log average train and val accuracy to tensorboard
         epoch_train_acc = torch.as_tensor(metrics["train_acc"]).mean()
         epoch_val_acc = torch.as_tensor(metrics["val_acc"]).mean()
 
-        raise NotImplementedError("Logging not implemented")
+        # ---- TensorBoard logging ----
+        logger.add_scalar("acc/train", float(epoch_train_acc.item()), epoch)
+        logger.add_scalar("acc/val", float(epoch_val_acc.item()), epoch)
+        logger.flush()
 
         # print on first, last, every 10th epoch
         if epoch == 0 or epoch == num_epoch - 1 or (epoch + 1) % 10 == 0:
