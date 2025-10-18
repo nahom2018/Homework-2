@@ -1,6 +1,6 @@
-
 from __future__ import annotations
 
+import os
 import math
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
@@ -93,8 +93,7 @@ class MLPClassifierDeep(nn.Module):
         if dropout and dropout > 0:
             layers.append(nn.Dropout(p=dropout))
 
-        # internal hidden layers (num_layers - 2 hidden linear layers total counting first hidden;
-        # here we add (num_layers - 3) additional hidden Linear layers)
+        # add (num_layers - 3) additional hidden Linear layers
         for _ in range(num_layers - 3):
             layers.append(nn.Linear(hidden_dim, hidden_dim))
             layers.append(nn.ReLU(inplace=True))
@@ -112,7 +111,6 @@ class ResidualBlock(nn.Module):
     """
     Simple 2-layer MLP residual block:
         y = x + Linear(ReLU(Linear(x)))
-    Assumes in_dim == hidden_dim for the residual add; otherwise uses a projection.
     """
     def __init__(self, dim: int, dropout: float = 0.0):
         super().__init__()
@@ -137,7 +135,7 @@ class MLPClassifierDeepResidual(nn.Module):
     def __init__(
         self,
         hidden_dim: int = 512,
-        num_blocks: int = 3,   # each block = 2 linear layers; with head/tail this easily exceeds 4 linear layers
+        num_blocks: int = 3,   # each block = 2 linear layers
         dropout: float = 0.0,
     ):
         super().__init__()
@@ -170,29 +168,6 @@ def save_model(model: nn.Module, path: str) -> None:
     torch.save(model.state_dict(), path)
 
 
-def load_model(model: nn.Module, path: str, map_location: Optional[str] = None) -> nn.Module:
-    """
-    Load weights into an existing model instance.
-    """
-    state = torch.load(path, map_location=map_location or "cpu")
-    model.load_state_dict(state)
-    return model
-
-
-def calculate_model_size_mb(state_dict: Optional[Dict[str, torch.Tensor]] = None, model: Optional[nn.Module] = None) -> float:
-    """
-    Utility to estimate model size in MB for the 40MB submission limit.
-    """
-    if state_dict is None:
-        if model is None:
-            return 0.0
-        state_dict = model.state_dict()
-    total = 0
-    for t in state_dict.values():
-        total += t.numel() * t.element_size()
-    return total / (1024 ** 2)
-
-
 def model_factory(name: str, **kwargs) -> nn.Module:
     """
     Create a model by name:
@@ -212,3 +187,66 @@ def model_factory(name: str, **kwargs) -> nn.Module:
     if name == "mlp_deep_residual":
         return MLPClassifierDeepResidual(**kwargs)
     raise ValueError(f"Unknown model name: {name}")
+
+# Alias that some code expects
+build_model = model_factory
+
+
+# ------------------------------
+# Flexible loader (works with both call styles)
+# ------------------------------
+def load_model(model_or_name, path: Optional[str] = None, map_location: Optional[str] = None, **kwargs) -> nn.Module:
+    """
+    Two supported usages:
+
+    1) Original behavior (checkpoint load):
+       load_model(model: nn.Module, path: str, map_location=None) -> model
+       - loads weights into an existing model instance.
+
+    2) Trainer-friendly behavior (construct + optional checkpoint):
+       load_model(name: str, **kwargs) -> model
+       - constructs a model via model_factory(name, **kwargs)
+       - if 'ckpt' (or 'path') is provided and points to a file, loads weights.
+
+    Returns the model instance in both cases.
+    """
+    # Case A: first arg is a model -> behave like the original implementation
+    if isinstance(model_or_name, nn.Module):
+        model = model_or_name
+        if path is not None:
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"load_model: checkpoint not found: {path}")
+            state = torch.load(path, map_location=map_location or "cpu")
+            model.load_state_dict(state)
+        return model
+
+    # Case B: first arg is a model name string -> build then optionally load
+    if isinstance(model_or_name, str):
+        name = model_or_name
+        ckpt = kwargs.pop("ckpt", None) or path  # accept ckpt or path
+        model = model_factory(name, **kwargs)
+        if ckpt:
+            if not os.path.isfile(ckpt):
+                raise FileNotFoundError(f"load_model: checkpoint not found: {ckpt}")
+            state = torch.load(ckpt, map_location=map_location or "cpu")
+            model.load_state_dict(state)
+        return model
+
+    raise TypeError(
+        "load_model: first argument must be an nn.Module (to load weights) "
+        "or a str model name (to construct a new model)."
+    )
+
+
+def calculate_model_size_mb(state_dict: Optional[Dict[str, torch.Tensor]] = None, model: Optional[nn.Module] = None) -> float:
+    """
+    Utility to estimate model size in MB for the 40MB submission limit.
+    """
+    if state_dict is None:
+        if model is None:
+            return 0.0
+        state_dict = model.state_dict()
+    total = 0
+    for t in state_dict.values():
+        total += t.numel() * t.element_size()
+    return total / (1024 ** 2)
