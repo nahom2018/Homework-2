@@ -94,6 +94,12 @@ def train(
         # ---- TensorBoard logging ----
         logger.add_scalar("acc/train", float(epoch_train_acc.item()), epoch)
         logger.add_scalar("acc/val", float(epoch_val_acc.item()), epoch)
+        # per-iteration during training
+        logger.add_scalar("train_loss", float(loss.item()), global_step)
+        logger.add_scalar("train_accuracy", float(acc), global_step)
+
+        # per-epoch
+        logger.add_scalar("val_accuracy", float(epoch_val_acc.item()), epoch)
         logger.flush()
 
         # print on first, last, every 10th epoch

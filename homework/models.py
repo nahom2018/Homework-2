@@ -168,49 +168,45 @@ def save_model(model: nn.Module, path: str) -> None:
     torch.save(model.state_dict(), path)
 
 
+_ALLOWED_HPARAMS = {"hidden_dim", "num_layers", "num_blocks", "dropout"}
+
 def model_factory(name: str, **kwargs) -> nn.Module:
     """
-    Create a model by name:
-        - linear
-        - mlp
-        - mlp_deep
-        - mlp_deep_residual
-    Extra kwargs are forwarded to constructors (e.g., hidden_dim, num_layers, num_blocks, dropout).
+    Create a model by name. Extra kwargs are filtered so unexpected keys
+    like 'with_weights' don't reach the constructors.
     """
+    clean = {k: v for k, v in kwargs.items() if k in _ALLOWED_HPARAMS}
     name = name.lower()
     if name == "linear":
         return LinearClassifier()
     if name == "mlp":
-        return MLPClassifier(**kwargs)
+        return MLPClassifier(**clean)
     if name == "mlp_deep":
-        return MLPClassifierDeep(**kwargs)
+        return MLPClassifierDeep(**clean)
     if name == "mlp_deep_residual":
-        return MLPClassifierDeepResidual(**kwargs)
+        return MLPClassifierDeepResidual(**clean)
     raise ValueError(f"Unknown model name: {name}")
 
-# Alias that some code expects
+# Alias some code might expect
 build_model = model_factory
 
 
 # ------------------------------
 # Flexible loader (works with both call styles)
 # ------------------------------
-def load_model(model_or_name, path: Optional[str] = None, map_location: Optional[str] = None, **kwargs) -> nn.Module:
+def load_model(
+    model_or_name,
+    path: Optional[str] = None,
+    map_location: Optional[str] = None,
+    **kwargs,
+) -> nn.Module:
     """
-    Two supported usages:
-
-    1) Original behavior (checkpoint load):
-       load_model(model: nn.Module, path: str, map_location=None) -> model
-       - loads weights into an existing model instance.
-
-    2) Trainer-friendly behavior (construct + optional checkpoint):
-       load_model(name: str, **kwargs) -> model
-       - constructs a model via model_factory(name, **kwargs)
-       - if 'ckpt' (or 'path') is provided and points to a file, loads weights.
-
-    Returns the model instance in both cases.
+    Two modes:
+      1) load_model(model, path) -> loads weights into existing model
+      2) load_model(name, **kwargs) -> builds model; if 'with_weights' or 'ckpt/path' provided,
+         tries to load checkpoint.
     """
-    # Case A: first arg is a model -> behave like the original implementation
+    # Mode 1: original contract (model instance + checkpoint path)
     if isinstance(model_or_name, nn.Module):
         model = model_or_name
         if path is not None:
@@ -220,16 +216,36 @@ def load_model(model_or_name, path: Optional[str] = None, map_location: Optional
             model.load_state_dict(state)
         return model
 
-    # Case B: first arg is a model name string -> build then optionally load
+    # Mode 2: name string
     if isinstance(model_or_name, str):
         name = model_or_name
-        ckpt = kwargs.pop("ckpt", None) or path  # accept ckpt or path
+
+        # Consume grader/driver flags so they don't hit constructors
+        with_weights = bool(kwargs.pop("with_weights", False))
+        ckpt = kwargs.pop("ckpt", None) or path
+
+        # Build model with only allowed hyperparameters
         model = model_factory(name, **kwargs)
+
+        # If weights requested but no ckpt passed, try common default paths (optional)
+        if with_weights and not ckpt:
+            for p in (
+                f"pretrained/{name}.pt",
+                f"pretrained/{name}.pth",
+                f"assets/{name}.th",
+                f"{name}.pt",
+            ):
+                if os.path.isfile(p):
+                    ckpt = p
+                    break
+
+        # Load if we have a checkpoint file
         if ckpt:
             if not os.path.isfile(ckpt):
                 raise FileNotFoundError(f"load_model: checkpoint not found: {ckpt}")
             state = torch.load(ckpt, map_location=map_location or "cpu")
             model.load_state_dict(state)
+
         return model
 
     raise TypeError(
