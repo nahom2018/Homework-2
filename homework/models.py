@@ -196,56 +196,66 @@ build_model = model_factory
 # ------------------------------
 # Flexible loader (works with both call styles)
 # ------------------------------
-def load_model(model_or_name, path: str | None = None, map_location: str = "cpu") -> nn.Module:
+def load_model(
+    model_or_name,
+    with_weights: bool = True,
+    path: str | None = None,
+    map_location: str = "cpu",
+    **kwargs,
+) -> nn.Module:
     """
-    Robust loader that finds checkpoints regardless of the grader's working directory.
+    Compatible with the grader:
 
-    Usage:
-      - load_model(model, "linear.th")
-      - load_model("linear")  # will look for linear.th
-      - load_model("mlp", "mlp.th")
+    - load_model('linear', with_weights=False)  -> fresh Linear model
+    - load_model('linear', with_weights=True)   -> loads from linear.th (or other common paths)
+    - load_model(model_instance, with_weights=True/False) -> optionally loads into provided instance
+
+    Also robust to the grader's working directory by searching multiple locations.
     """
-    # Accept either a model instance or a model name
+    # 1) Build/accept the model instance
     if isinstance(model_or_name, nn.Module):
         model = model_or_name
-        ckpt_name = Path(path) if path is not None else None
-        model_name = None
+        model_name = getattr(model, "__class__", type(model)).__name__.lower()
+        # normalize common class names to checkpoint stem
+        if "linear" in model_name: model_name = "linear"
+        elif "residual" in model_name: model_name = "mlp_deep_residual"
+        elif "deep" in model_name: model_name = "mlp_deep"
+        elif "mlp" in model_name: model_name = "mlp"
     else:
         model_name = str(model_or_name).lower()
-        model = model_factory(model_name)
-        ckpt_name = Path(path) if path is not None else Path(f"{model_name}.th")
+        # assumes you have model_factory in this module
+        model = model_factory(model_name, **kwargs)
 
+    # 2) If weights are not requested, just return the fresh model
+    if not with_weights:
+        return model
+
+    # 3) Determine candidate checkpoint filenames
+    ckpt = Path(path) if path is not None else Path(f"{model_name}.th")
     tried = []
-    root = Path(__file__).resolve().parents[1]  # project root (folder that has homework/, grader/, bundle.py)
 
-    candidates: list[Path] = []
-    # 1) exact path as-given
-    if ckpt_name is not None:
-        candidates.append(ckpt_name)
+    # project root = folder that contains homework/, grader/, bundle.py
+    root = Path(__file__).resolve().parents[1]
 
-    # 2) current working dir
-    if ckpt_name is not None:
-        candidates.append(Path.cwd() / ckpt_name.name)
+    candidates = []
+    # as given
+    candidates.append(ckpt)
+    # current working dir
+    candidates.append(Path.cwd() / ckpt.name)
+    # project root + common siblings
+    candidates += [
+        root / ckpt.name,
+        root / "homework" / ckpt.name,
+        root / "grader" / ckpt.name,
+        root / "logs" / ckpt.name,
+    ]
+    # logs/<stem>_*/<stem>.th
+    stem = ckpt.stem  # e.g., 'linear', 'mlp'
+    candidates += sorted((root / "logs").glob(f"{stem}_*/{ckpt.name}"))
+    # generic fallback
+    candidates.append(root / "model.th")
 
-    # 3) project-root and common sibling folders
-    if ckpt_name is not None:
-        candidates += [
-            root / ckpt_name.name,
-            root / "homework" / ckpt_name.name,
-            root / "grader" / ckpt_name.name,
-            root / "logs" / ckpt_name.name,
-        ]
-
-    # 4) timestamped logs: logs/<name>_*/<name>.th
-    if ckpt_name is not None:
-        stem = ckpt_name.stem  # "linear", "mlp", etc.
-        candidates += sorted((root / "logs").glob(f"{stem}_*/{ckpt_name.name}"))
-
-    # 5) generic fallback some skeletons use
-    if model_name and (root / "model.th").exists():
-        candidates.append(root / "model.th")
-
-    # try them in order
+    # 4) Try to load
     for c in candidates:
         try:
             if c.exists():
@@ -257,9 +267,8 @@ def load_model(model_or_name, path: str | None = None, map_location: str = "cpu"
             tried.append(str(c))
             continue
 
-    # If nothing worked, raise with a helpful message
     raise FileNotFoundError(
-        f"Could not find checkpoint for {model_name or 'model'}. "
+        f"Could not find checkpoint for '{model_name}'. "
         f"Tried: {' | '.join(tried)}"
     )
 
