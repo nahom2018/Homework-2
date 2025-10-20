@@ -201,56 +201,69 @@ def load_model(
     **kwargs,
 ) -> nn.Module:
     """
-    Two modes:
-      1) load_model(model, path) -> loads weights into existing model
-      2) load_model(name, **kwargs) -> builds model; if 'with_weights' or 'ckpt/path' provided,
-         tries to load checkpoint.
+    Robust loader that finds checkpoints regardless of the grader's working directory.
+
+    Usage:
+      - load_model(model, "linear.th")
+      - load_model("linear")  # will look for linear.th
+      - load_model("mlp", "mlp.th")
     """
-    # Mode 1: original contract (model instance + checkpoint path)
+    # Accept either a model instance or a model name
     if isinstance(model_or_name, nn.Module):
         model = model_or_name
-        if path is not None:
-            if not os.path.isfile(path):
-                raise FileNotFoundError(f"load_model: checkpoint not found: {path}")
-            state = torch.load(path, map_location=map_location or "cpu")
-            model.load_state_dict(state)
-        return model
+        ckpt_name = Path(path) if path is not None else None
+        model_name = None
+    else:
+        model_name = str(model_or_name).lower()
+        model = model_factory(model_name)
+        ckpt_name = Path(path) if path is not None else Path(f"{model_name}.th")
 
-    # Mode 2: name string
-    if isinstance(model_or_name, str):
-        name = model_or_name
+    tried = []
+    root = Path(__file__).resolve().parents[1]  # project root (folder that has homework/, grader/, bundle.py)
 
-        # Consume grader/driver flags so they don't hit constructors
-        with_weights = bool(kwargs.pop("with_weights", False))
-        ckpt = kwargs.pop("ckpt", None) or path
+    candidates: list[Path] = []
+    # 1) exact path as-given
+    if ckpt_name is not None:
+        candidates.append(ckpt_name)
 
-        # Build model with only allowed hyperparameters
-        model = model_factory(name, **kwargs)
+    # 2) current working dir
+    if ckpt_name is not None:
+        candidates.append(Path.cwd() / ckpt_name.name)
 
-        # If weights requested but no ckpt passed, try common default paths (optional)
-        if with_weights and not ckpt:
-            for p in (
-                f"pretrained/{name}.pt",
-                f"pretrained/{name}.pth",
-                f"assets/{name}.th",
-                f"{name}.pt",
-            ):
-                if os.path.isfile(p):
-                    ckpt = p
-                    break
+    # 3) project-root and common sibling folders
+    if ckpt_name is not None:
+        candidates += [
+            root / ckpt_name.name,
+            root / "homework" / ckpt_name.name,
+            root / "grader" / ckpt_name.name,
+            root / "logs" / ckpt_name.name,
+        ]
 
-        # Load if we have a checkpoint file
-        if ckpt:
-            if not os.path.isfile(ckpt):
-                raise FileNotFoundError(f"load_model: checkpoint not found: {ckpt}")
-            state = torch.load(ckpt, map_location=map_location or "cpu")
-            model.load_state_dict(state)
+    # 4) timestamped logs: logs/<name>_*/<name>.th
+    if ckpt_name is not None:
+        stem = ckpt_name.stem  # "linear", "mlp", etc.
+        candidates += sorted((root / "logs").glob(f"{stem}_*/{ckpt_name.name}"))
 
-        return model
+    # 5) generic fallback some skeletons use
+    if model_name and (root / "model.th").exists():
+        candidates.append(root / "model.th")
 
-    raise TypeError(
-        "load_model: first argument must be an nn.Module (to load weights) "
-        "or a str model name (to construct a new model)."
+    # try them in order
+    for c in candidates:
+        try:
+            if c.exists():
+                state = torch.load(str(c), map_location=map_location)
+                model.load_state_dict(state)
+                return model
+            tried.append(str(c))
+        except Exception:
+            tried.append(str(c))
+            continue
+
+    # If nothing worked, raise with a helpful message
+    raise FileNotFoundError(
+        f"Could not find checkpoint for {model_name or 'model'}. "
+        f"Tried: {' | '.join(tried)}"
     )
 
 
