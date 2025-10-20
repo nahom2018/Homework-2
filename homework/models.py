@@ -194,12 +194,7 @@ build_model = model_factory
 # ------------------------------
 # Flexible loader (works with both call styles)
 # ------------------------------
-def load_model(
-    model_or_name,
-    path: Optional[str] = None,
-    map_location: Optional[str] = None,
-    **kwargs,
-) -> nn.Module:
+def load_model(model_or_name, path: str | None = None, map_location: str = "cpu") -> nn.Module:
     """
     Robust loader that finds checkpoints regardless of the grader's working directory.
 
